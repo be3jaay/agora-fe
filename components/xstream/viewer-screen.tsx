@@ -41,14 +41,12 @@ const WAVEFORM_BARS = Array.from({ length: 22 }, (_, i) =>
   10 + Math.sin(i * 0.8) * 5 + Math.abs(Math.sin(i * 1.4)) * 12
 );
 
-const NOVA_TRANSCRIPT = [
-  { role: "user" as const, text: "Bagay kaya sakin oversized fit?" },
-  { role: "nova" as const, text: "Medium would give the relaxed look the host is wearing — based on your last order in a similar style, you sized up once. I'd recommend staying at Medium here." },
-  { role: "user" as const, text: "Yung navy blue, available pa?" },
-  { role: "nova" as const, text: "Navy is in stock across all sizes right now. Medium is moving fastest — only 7 left. I've pre-loaded your saved address so checkout takes one tap." },
-];
+const QUICK_ACTIONS = ["My size?", "COD available?", "Shipping?", "Available colors?"];
 
-const QUICK_ACTIONS = ["My size?", "COD available?", "Shipping to Cebu?", "Bundle deal?"];
+const BACKEND_URL =
+  process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3000";
+
+type TranscriptLine = { role: "user" | "nova"; text: string };
 
 /* ─────────────────────────────────────────────────────────
    Ambient AI Orb
@@ -278,8 +276,8 @@ function WatchOverlay({
    Product sidebar (right panel — default state)
 ───────────────────────────────────────────────────────── */
 function ProductSidebar({
-  isLive, onOpenAi,
-}: { isLive: boolean; onOpenAi: () => void }) {
+  isLive, onOpenAi, onCheckout,
+}: { isLive: boolean; onOpenAi: () => void; onCheckout: () => void }) {
   const [selectedSize, setSelectedSize] = useState("M");
 
   return (
@@ -394,12 +392,12 @@ function ProductSidebar({
 
           {/* CTAs */}
           <div style={{ display: "flex", gap: 8 }}>
-            <button className="xs-btn xs-btn-primary" style={{
+            <button onClick={onCheckout} className="xs-btn xs-btn-primary" style={{
               flex: 1, padding: "12px 0", fontSize: 13.5, fontWeight: 700,
               justifyContent: "center", borderRadius: 10,
             }}>
               <XIcon name="cart" size={15} />
-              {isLive ? "Buy Now" : "Add to Cart"}
+              {isLive ? "Buy Now" : "Checkout"}
             </button>
             <button style={{
               width: 46, height: 46, borderRadius: 10, flexShrink: 0,
@@ -438,8 +436,8 @@ function ProductSidebar({
             <div style={{ fontSize: 11, color: "var(--xs-good)" }}>Save $34</div>
           </div>
         </div>
-        <button className="xs-btn xs-btn-ghost" style={{ width: "100%", marginTop: 10, fontSize: 12, justifyContent: "center" }}>
-          Add bundle
+        <button onClick={onCheckout} className="xs-btn xs-btn-ghost" style={{ width: "100%", marginTop: 10, fontSize: 12, justifyContent: "center" }}>
+          Add bundle &amp; checkout
         </button>
       </div>
     </div>
@@ -449,15 +447,72 @@ function ProductSidebar({
 /* ─────────────────────────────────────────────────────────
    AI Voice Panel (right panel — AI state)
 ───────────────────────────────────────────────────────── */
-function AiVoicePanel({ onClose }: { onClose: () => void }) {
+function AiVoicePanel({
+  onClose,
+  viewerId,
+  onSpeaking,
+  onNudgeCheckout,
+}: {
+  onClose: () => void;
+  viewerId: string;
+  onSpeaking: (speaking: boolean) => void;
+  onNudgeCheckout: () => void;
+}) {
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [transcript, setTranscript] = useState<TranscriptLine[]>([]);
+  const [pending, setPending] = useState(false);
+  const [input, setInput] = useState("");
+
+  // Subscribe to the per-viewer SSE stream for AI answers.
+  useEffect(() => {
+    const es = new EventSource(
+      `${BACKEND_URL}/api/qa/stream?viewerId=${encodeURIComponent(viewerId)}`
+    );
+    es.onmessage = (evt) => {
+      try {
+        const payload = JSON.parse(evt.data) as {
+          type: string;
+          answer: string;
+          nudgeToCheckout?: boolean;
+        };
+        if (payload.type !== "ANSWER") return;
+        setTranscript((prev) => [...prev, { role: "nova", text: payload.answer }]);
+        setPending(false);
+        onSpeaking(true);
+        window.setTimeout(() => onSpeaking(false), 2400);
+        if (payload.nudgeToCheckout) onNudgeCheckout();
+      } catch {}
+    };
+    return () => es.close();
+  }, [viewerId, onSpeaking, onNudgeCheckout]);
 
   useEffect(() => {
-    // Scroll to bottom of transcript
     if (transcriptRef.current) {
       transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
     }
-  }, []);
+  }, [transcript, pending]);
+
+  async function send(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed || pending) return;
+    setTranscript((prev) => [...prev, { role: "user", text: trimmed }]);
+    setInput("");
+    setPending(true);
+    try {
+      await fetch(`${BACKEND_URL}/api/qa/ask`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ viewerId, text: trimmed }),
+      });
+    } catch (err) {
+      setPending(false);
+      setTranscript((prev) => [
+        ...prev,
+        { role: "nova", text: "Hmm, I lost connection — try again in a sec." },
+      ]);
+    }
+  }
 
   return (
     <div style={{
@@ -537,10 +592,19 @@ function AiVoicePanel({ onClose }: { onClose: () => void }) {
           marginBottom: 14,
         }}
       >
-        {NOVA_TRANSCRIPT.map((line, i) => (
+        {transcript.length === 0 && !pending && (
+          <div style={{
+            padding: "10px 0", fontSize: 12.5, lineHeight: 1.5,
+            color: "var(--xs-text-3)", fontStyle: "italic",
+          }} className="xs-serif">
+            Ask me anything about the product — size, color, shipping, you name it.
+          </div>
+        )}
+
+        {transcript.map((line, i) => (
           <div key={i} style={{
             display: "flex", gap: 10, alignItems: "flex-start",
-            animation: `xs-card-in 300ms ${i * 80}ms both`,
+            animation: `xs-card-in 300ms both`,
           }}>
             <span style={{
               fontSize: 9.5, letterSpacing: "0.1em", fontWeight: 600,
@@ -555,24 +619,26 @@ function AiVoicePanel({ onClose }: { onClose: () => void }) {
               fontStyle: line.role === "nova" ? "italic" : "normal",
               fontFamily: line.role === "nova" ? "'Instrument Serif', serif" : "inherit",
             }} className={line.role === "nova" ? "xs-serif" : ""}>
-              "{line.text}"
+              &ldquo;{line.text}&rdquo;
             </div>
           </div>
         ))}
 
         {/* Nova is typing */}
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <span style={{ fontSize: 9.5, color: "var(--xs-accent)", fontWeight: 600, width: 36, letterSpacing: "0.1em" }}>NOVA</span>
-          <div style={{ display: "flex", gap: 4, padding: "5px 8px" }}>
-            {[0, 1, 2].map(i => (
-              <div key={i} style={{
-                width: 5, height: 5, borderRadius: "50%",
-                background: "var(--xs-accent)",
-                animation: `xs-pulse 1.4s ${i * 0.25}s ease-in-out infinite`,
-              }} />
-            ))}
+        {pending && (
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <span style={{ fontSize: 9.5, color: "var(--xs-accent)", fontWeight: 600, width: 36, letterSpacing: "0.1em" }}>NOVA</span>
+            <div style={{ display: "flex", gap: 4, padding: "5px 8px" }}>
+              {[0, 1, 2].map(i => (
+                <div key={i} style={{
+                  width: 5, height: 5, borderRadius: "50%",
+                  background: "var(--xs-accent)",
+                  animation: `xs-pulse 1.4s ${i * 0.25}s ease-in-out infinite`,
+                }} />
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Quick action chips */}
@@ -582,10 +648,11 @@ function AiVoicePanel({ onClose }: { onClose: () => void }) {
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
           {QUICK_ACTIONS.map(q => (
-            <button key={q} style={{
+            <button key={q} onClick={() => void send(q)} disabled={pending} style={{
               padding: "5px 12px", borderRadius: 20, fontSize: 11.5, fontWeight: 500,
               background: "var(--xs-surf-2)", border: "1px solid var(--xs-border-s)",
-              color: "var(--xs-text-2)", cursor: "pointer",
+              color: "var(--xs-text-2)", cursor: pending ? "not-allowed" : "pointer",
+              opacity: pending ? 0.5 : 1,
               transition: "all 140ms ease",
             }}>
               {q}
@@ -595,26 +662,43 @@ function AiVoicePanel({ onClose }: { onClose: () => void }) {
       </div>
 
       {/* Input */}
-      <div style={{
-        flexShrink: 0, marginBottom: 12,
-        display: "flex", gap: 8, alignItems: "center",
-        padding: "8px 12px", borderRadius: 10,
-        background: "var(--xs-surf-2)", border: "1px solid var(--xs-border-s)",
-      }}>
+      <form
+        onSubmit={(e) => { e.preventDefault(); void send(input); }}
+        style={{
+          flexShrink: 0, marginBottom: 12,
+          display: "flex", gap: 8, alignItems: "center",
+          padding: "8px 12px", borderRadius: 10,
+          background: "var(--xs-surf-2)", border: "1px solid var(--xs-border-s)",
+        }}
+      >
         <span className="xs-ai-dot" style={{ width: 7, height: 7, flexShrink: 0 }} />
-        <span style={{ flex: 1, fontSize: 12.5, color: "var(--xs-text-3)" }}>Ask Nova anything…</span>
+        <input
+          ref={inputRef}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="Ask Nova anything…"
+          disabled={pending}
+          style={{
+            flex: 1, fontSize: 12.5, color: "var(--xs-text)",
+            background: "transparent", border: 0, outline: "none",
+          }}
+        />
         <XIcon name="mic" size={14} style={{ color: "var(--xs-text-3)" }} />
-      </div>
+      </form>
 
       {/* Checkout CTA */}
-      <button className="xs-btn xs-btn-primary" style={{
-        flexShrink: 0, width: "100%", padding: "13px 0",
-        fontSize: 13.5, fontWeight: 700, justifyContent: "center",
-        borderRadius: 10,
-        boxShadow: "0 0 24px rgba(164,192,219,0.15)",
-      }}>
+      <button
+        onClick={onNudgeCheckout}
+        className="xs-btn xs-btn-primary"
+        style={{
+          flexShrink: 0, width: "100%", padding: "13px 0",
+          fontSize: 13.5, fontWeight: 700, justifyContent: "center",
+          borderRadius: 10,
+          boxShadow: "0 0 24px rgba(164,192,219,0.15)",
+        }}
+      >
         <XIcon name="cart" size={15} />
-        Complete purchase · $84
+        Go to checkout &rarr;
       </button>
     </div>
   );
@@ -633,10 +717,16 @@ export function ViewerScreen() {
   const [card1, setCard1] = useState(false);
   const [card2, setCard2] = useState(false);
 
+  // Stable viewerId for this session — keys the per-viewer Q&A SSE topic.
+  const viewerIdRef = useRef<string>("");
+  if (!viewerIdRef.current) {
+    viewerIdRef.current = "viewer-" + Math.random().toString(36).slice(2, 8);
+  }
+
   const videoTrack = (agora.remoteVideo ?? agora.localVideo) as
     ICameraVideoTrack | IRemoteVideoTrack | null;
 
-  // Simulate ambient AI detection lifecycle
+  // Subtle idle/detecting cycle on first open — pure ambience.
   useEffect(() => {
     const t1 = setTimeout(() => setOrbState("detecting"),            3200);
     const t2 = setTimeout(() => { setCard1(true); },                 4000);
@@ -646,12 +736,16 @@ export function ViewerScreen() {
     return () => [t1, t2, t3, t4, t5].forEach(clearTimeout);
   }, []);
 
-  // Orb becomes "speaking" when AI panel is open
   useEffect(() => {
-    setOrbState(aiOpen ? "speaking" : "idle");
+    if (!aiOpen) setOrbState("idle");
   }, [aiOpen]);
 
   function handleWatch() { void agora.join("audience"); }
+
+  function goToCheckout() {
+    const url = `/xstream/checkout?viewerId=${encodeURIComponent(viewerIdRef.current)}`;
+    window.location.href = url;
+  }
 
   return (
     <div className="xs-root" style={{
@@ -911,8 +1005,17 @@ export function ViewerScreen() {
           overflow: "hidden",
         }}>
           {aiOpen
-            ? <AiVoicePanel onClose={() => setAiOpen(false)} />
-            : <ProductSidebar isLive={isLive} onOpenAi={() => setAiOpen(true)} />
+            ? <AiVoicePanel
+                onClose={() => setAiOpen(false)}
+                viewerId={viewerIdRef.current}
+                onSpeaking={(speaking) => setOrbState(speaking ? "speaking" : "idle")}
+                onNudgeCheckout={goToCheckout}
+              />
+            : <ProductSidebar
+                isLive={isLive}
+                onOpenAi={() => setAiOpen(true)}
+                onCheckout={goToCheckout}
+              />
           }
         </div>
       </div>
