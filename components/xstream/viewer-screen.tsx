@@ -1,6 +1,7 @@
 "use client";
 
-import React, { lazy, Suspense, useState, useEffect, useRef } from "react";
+import React, { lazy, Suspense, useState, useEffect, useRef, useCallback } from "react";
+import { HesitationPopup, type TriggerType } from "./hesitation-popup";
 import Link from "next/link";
 import { XIcon } from "./x-icon";
 import { XMark } from "./x-mark";
@@ -42,6 +43,93 @@ const WAVEFORM_BARS = Array.from({ length: 22 }, (_, i) =>
 );
 
 const QUICK_ACTIONS = ["My size?", "COD available?", "Shipping?", "Available colors?"];
+
+/* ─────────────────────────────────────────────────────────
+   Hesitation Detection
+───────────────────────────────────────────────────────── */
+const HESITATION_WORDS = [
+  // filler sounds
+  "hmm", "hm", "umm", "um", "uh", "uhh", "err", "erm",
+  // uncertainty (EN)
+  "idk", "not sure", "not really sure", "unsure", "confused", "confusing",
+  "dunno", "i don't know", "i dont know", "i have no idea", "no idea",
+  "not certain", "not confident", "not convinced",
+  // hedging (EN)
+  "maybe", "perhaps", "possibly", "probably not", "i guess", "i think",
+  "kind of", "kinda", "sort of", "sorta", "not really",
+  // hesitation phrases (EN)
+  "let me think", "i'm not sure", "im not sure", "hard to say",
+  "i'm confused", "im confused", "this is confusing",
+  "still deciding", "can't decide", "cant decide", "on the fence",
+  "second guessing", "having second thoughts",
+  // Tagalog hesitation
+  "siguro", "baka", "hindi ko alam", "di ko alam", "hindi ako sure",
+  "not sure ako", "confused ako", "hindi ko pa alam", "hindi ko pa sure",
+  "nag-iisip pa", "nag iisip pa", "iniisip ko pa", "sandali lang",
+  "wait lang", "sandali", "di ko maisip", "mahirap sabihin",
+  "paano kaya", "ay nako", "hindi ko gets", "di ko gets",
+  "hindi ko maintindihan", "di ko maintindihan", "nalilito ako",
+  // Taglish uncertainty
+  "still thinking", "thinking pa", "di pa sure", "hindi pa sure",
+  "medyo confused", "medyo hindi sure", "baka siguro", "hindi ko sure",
+];
+const QUESTION_STARTERS = [
+  // English
+  "what", "how", "why", "when", "where", "which", "who",
+  "is this", "does this", "should i", "will this", "can i",
+  "do you", "is it", "are there", "are these", "are you",
+  "would this", "could i", "tell me", "explain", "can you",
+  "do i need", "is there", "do these", "does it",
+  // Tagalog question starters
+  "ano", "paano", "bakit", "saan", "kailan", "sino", "magkano", "ilan",
+  "pwede ba", "puwede ba", "may ba", "meron ba", "mayroon ba",
+  "okay ba", "ok ba", "tama ba", "totoo ba", "legit ba", "sure ba",
+  "original ba", "safe ba", "mabilis ba", "malaki ba", "maliit ba",
+  "kasya ba", "sukat ba", "diba", "di ba", "hindi ba",
+];
+const PRICE_DOUBT_PHRASES = [
+  // English
+  "is this worth it", "worth it", "too expensive", "so expensive",
+  "quite expensive", "pricey", "kinda expensive", "really expensive",
+  "is the price", "why is it", "why so", "that's too much",
+  "thats too much", "too much", "overpriced", "is it cheap",
+  "good deal", "bad deal", "is this a good", "for the price",
+  "cheaper elsewhere", "better price", "lower price",
+  // Tagalog / Taglish price doubt
+  "mahal", "mahal ba", "mahal naman", "ang mahal", "bakit mahal",
+  "sulit ba", "sulit naman ba", "hindi sulit", "di sulit",
+  "mura ba", "may discount", "may discount ba", "may sale ba",
+  "libre shipping", "libre ba shipping", "bayad ba shipping",
+  "magkano talaga", "tama ba presyo", "sobrang mahal",
+  "worth it ba", "worth it kaya", "hindi worth it",
+];
+
+function detectHesitation(input: string): { detected: boolean; type: TriggerType; matchedWord: string } {
+  const lower = input.trim().toLowerCase();
+  if (!lower) return { detected: false, type: "hesitation", matchedWord: "" };
+
+  for (const phrase of PRICE_DOUBT_PHRASES) {
+    if (lower.includes(phrase)) return { detected: true, type: "price-doubt", matchedWord: phrase };
+  }
+
+  if (lower.endsWith("?")) {
+    const starter = QUESTION_STARTERS.find(s => lower.startsWith(s));
+    const matchedWord = starter ?? lower.split(" ")[0] ?? lower;
+    return { detected: true, type: "question", matchedWord };
+  }
+  for (const s of QUESTION_STARTERS) {
+    if (lower.startsWith(s + " ") || lower.startsWith(s + "?")) {
+      return { detected: true, type: "question", matchedWord: s };
+    }
+  }
+
+  for (const word of HESITATION_WORDS) {
+    const pattern = new RegExp(`(?:^|[\\s,])${word.replace(/\s+/g, "\\s+")}(?:[\\s,!.?]|$)`);
+    if (pattern.test(lower)) return { detected: true, type: "hesitation", matchedWord: word };
+  }
+
+  return { detected: false, type: "hesitation", matchedWord: "" };
+}
 
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3000";
@@ -716,6 +804,18 @@ export function ViewerScreen() {
   const [orbState,  setOrbState]  = useState<OrbState>("idle");
   const [card1, setCard1] = useState(false);
   const [card2, setCard2] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const [isListening, setIsListening] = useState(false);
+  const [hesitationPopup, setHesitationPopup] = useState<{
+    visible: boolean; type: TriggerType; matchedWord: string;
+  } | null>(null);
+
+  const detectionCooldownRef  = useRef(false);
+  const detectionTimerRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hesitationActiveRef   = useRef(false);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const recognitionRef        = useRef<any>(null);
+  const handleTranscriptRef   = useRef<(value: string) => void>(() => {});
 
   // Stable viewerId for this session — keys the per-viewer Q&A SSE topic.
   const viewerIdRef = useRef<string>("");
@@ -728,17 +828,84 @@ export function ViewerScreen() {
 
   // Subtle idle/detecting cycle on first open — pure ambience.
   useEffect(() => {
-    const t1 = setTimeout(() => setOrbState("detecting"),            3200);
+    const t1 = setTimeout(() => { if (!hesitationActiveRef.current) setOrbState("detecting"); },            3200);
     const t2 = setTimeout(() => { setCard1(true); },                 4000);
-    const t3 = setTimeout(() => setOrbState("idle"),                 5600);
-    const t4 = setTimeout(() => setOrbState("detecting"),            9000);
-    const t5 = setTimeout(() => { setCard2(true); setOrbState("idle"); }, 10200);
+    const t3 = setTimeout(() => { if (!hesitationActiveRef.current) setOrbState("idle"); },                 5600);
+    const t4 = setTimeout(() => { if (!hesitationActiveRef.current) setOrbState("detecting"); },            9000);
+    const t5 = setTimeout(() => { if (!hesitationActiveRef.current) { setCard2(true); setOrbState("idle"); } }, 10200);
     return () => [t1, t2, t3, t4, t5].forEach(clearTimeout);
   }, []);
 
   useEffect(() => {
     if (!aiOpen) setOrbState("idle");
   }, [aiOpen]);
+
+  const handleTranscript = useCallback((value: string) => {
+    setTranscript(value);
+    if (hesitationActiveRef.current || detectionCooldownRef.current) return;
+    if (detectionTimerRef.current) clearTimeout(detectionTimerRef.current);
+    detectionTimerRef.current = setTimeout(() => {
+      const result = detectHesitation(value);
+      if (!result.detected) return;
+      detectionCooldownRef.current = true;
+      hesitationActiveRef.current = true;
+      setOrbState("detecting");
+      setTimeout(() => {
+        setOrbState("speaking");
+        setTimeout(() => {
+          setHesitationPopup({ visible: true, type: result.type, matchedWord: result.matchedWord });
+          setTimeout(() => { detectionCooldownRef.current = false; }, 30_000);
+        }, 800);
+      }, 700);
+    }, 400);
+  }, []);
+
+  // Keep ref current so speech recognition closure always calls latest version
+  handleTranscriptRef.current = handleTranscript;
+
+  // Speech recognition setup — continuous listening, feeds detectHesitation
+  useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const SpeechRecognitionAPI = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognitionAPI) return;
+
+    const recognition = new SpeechRecognitionAPI();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = "en-US";
+
+    recognition.onstart = () => setIsListening(true);
+    recognition.onerror = (e: { error: string }) => {
+      if (e.error !== "no-speech") setIsListening(false);
+    };
+    recognition.onend = () => {
+      setIsListening(false);
+      setTranscript("");
+      // Auto-restart unless detection is in progress
+      if (!hesitationActiveRef.current) {
+        try { recognition.start(); } catch { /* ignore restart race */ }
+      }
+    };
+    recognition.onresult = (e: { resultIndex: number; results: SpeechRecognitionResultList }) => {
+      let heard = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        heard += e.results[i][0].transcript;
+      }
+      handleTranscriptRef.current(heard);
+    };
+
+    recognitionRef.current = recognition;
+    try { recognition.start(); } catch { /* ignore */ }
+
+    return () => {
+      recognition.onend = null;
+      try { recognition.stop(); } catch { /* ignore */ }
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => { if (detectionTimerRef.current) clearTimeout(detectionTimerRef.current); };
+  }, []);
 
   function handleWatch() { void agora.join("audience"); }
 
@@ -922,6 +1089,46 @@ export function ViewerScreen() {
             </div>
           </div>
 
+          {/* ── BOTTOM-LEFT: voice listener indicator ── */}
+          <div style={{
+            position: "absolute", left: 18, bottom: 56,
+            width: 300, display: "flex", alignItems: "center", gap: 8,
+            padding: "7px 12px 7px 10px",
+            background: "rgba(10,14,19,0.72)", backdropFilter: "blur(16px)",
+            WebkitBackdropFilter: "blur(16px)",
+            border: `1px solid ${isListening ? "rgba(200,153,112,0.25)" : "rgba(255,255,255,0.08)"}`,
+            borderRadius: 22, pointerEvents: "none",
+            transition: "border-color 300ms ease",
+          }}>
+            <XIcon name="mic" size={13} style={{
+              flexShrink: 0,
+              color: isListening ? "var(--xs-warn)" : "rgba(255,255,255,0.3)",
+              transition: "color 300ms ease",
+              animation: isListening ? "xs-pulse 1.4s ease-in-out infinite" : "none",
+            }} />
+            <span style={{
+              flex: 1, fontSize: 12,
+              color: transcript ? "#f6f2ea" : "rgba(255,255,255,0.3)",
+              overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis",
+            }}>
+              {transcript || (isListening ? "Listening…" : "Voice detection inactive")}
+            </span>
+          </div>
+
+          {/* ── HESITATION POPUP ── */}
+          {hesitationPopup?.visible && (
+            <HesitationPopup
+              triggerType={hesitationPopup.type}
+              triggerWord={hesitationPopup.matchedWord}
+              onClose={() => {
+                setHesitationPopup(null);
+                setOrbState("idle");
+                hesitationActiveRef.current = false;
+              }}
+              onCheckout={goToCheckout}
+            />
+          )}
+
           {/* ── BOTTOM-RIGHT: AI orb + assistive cards ── */}
           <div style={{
             position: "absolute", right: 18, bottom: 70,
@@ -1046,6 +1253,10 @@ export function ViewerScreen() {
         @keyframes xs-card-in {
           from { opacity: 0; transform: translateY(10px) scale(0.97); }
           to   { opacity: 1; transform: translateY(0)    scale(1);    }
+        }
+        @keyframes xs-backdrop-in {
+          from { opacity: 0; }
+          to   { opacity: 1; }
         }
         @keyframes xs-panel-in {
           from { opacity: 0; transform: translateX(16px); }
