@@ -177,23 +177,26 @@ export function VideoStage({ viral, theme = "dark", liveTrack, mirrorVideo = fal
         ))}
       </div>
 
-      {/* BOTTOM-LEFT: chat overlay */}
+      {/* BOTTOM-LEFT: chat overlay (scrolling, TikTok-style) */}
       <div style={{
-        position: "absolute", left: 16, bottom: 60, width: 360,
+        position: "absolute", left: 16, bottom: 60, width: 340,
         maxHeight: 220, overflow: "hidden", pointerEvents: "none",
-        maskImage: "linear-gradient(to top, white 60%, transparent)",
-        WebkitMaskImage: "linear-gradient(to top, white 60%, transparent)",
+        maskImage: "linear-gradient(to top, white 55%, transparent)",
+        WebkitMaskImage: "linear-gradient(to top, white 55%, transparent)",
       }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {CHAT_OVERLAY.map((m, i) => (
+        <div style={{
+          display: "flex", flexDirection: "column", gap: 7,
+          animation: `xs-chatscroll-${viral ? "viral" : "calm"} ${viral ? "9s" : "18s"} linear infinite`,
+        }}>
+          {[...CHAT_OVERLAY, ...CHAT_OVERLAY].map((m, i) => (
             <div key={i} style={{
               display: "inline-flex", gap: 7, alignItems: "baseline",
-              padding: "3px 9px", borderRadius: 7, alignSelf: "flex-start",
-              background: "rgba(10,14,19,0.5)", backdropFilter: "blur(8px)",
-              fontSize: 11.5, color: "#f6f2ea",
+              padding: "3px 10px", borderRadius: 7, alignSelf: "flex-start",
+              background: "rgba(10,14,19,0.52)", backdropFilter: "blur(8px)",
+              fontSize: 12, color: "#f6f2ea",
             }}>
               <span style={{ color: m.color, fontWeight: 500 }}>{m.u}</span>
-              <span style={{ opacity: 0.92 }}>{m.c}</span>
+              <span style={{ opacity: 0.9 }}>{m.c}</span>
             </div>
           ))}
         </div>
