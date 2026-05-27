@@ -16,6 +16,10 @@ interface VideoStageProps {
   liveTrack?: ICameraVideoTrack | IRemoteVideoTrack | null;
   /** Mirror the video (local camera) */
   mirrorVideo?: boolean;
+  /** Functional elapsed-time label (HH:MM:SS). Falls back to mock value when undefined. */
+  durationLabel?: string;
+  /** Progress bar fill percentage (0–100). Falls back to mock value when undefined. */
+  progressPct?: number;
 }
 
 const CHAT_OVERLAY = [
@@ -37,7 +41,10 @@ const HEARTS = [
   { delay: "3.4s", x: 8,  color: "#d97ab1" },
 ];
 
-export function VideoStage({ viral, theme = "dark", liveTrack, mirrorVideo = false }: VideoStageProps) {
+export function VideoStage({ viral, theme = "dark", liveTrack, mirrorVideo = false, durationLabel, progressPct }: VideoStageProps) {
+  const timerLabel = durationLabel ?? "00:00:00";
+  const fillPct    = progressPct  ?? 0;
+  const fillStr    = `${fillPct}%`;
   const isDark = theme !== "light";
   const bg = isDark
     ? "radial-gradient(ellipse at 30% 40%, #2d3a4c 0%, #11161e 55%, #06090d 100%)"
@@ -101,7 +108,7 @@ export function VideoStage({ viral, theme = "dark", liveTrack, mirrorVideo = fal
           padding: "4px 9px", borderRadius: 6,
           background: "rgba(10,14,19,0.55)", backdropFilter: "blur(10px)",
           color: "#f6f2ea", fontSize: 11, letterSpacing: "0.04em",
-        }}>01:24:38</span>
+        }}>{timerLabel}</span>
         <span style={{
           padding: "4px 9px", borderRadius: 6,
           background: "rgba(10,14,19,0.55)", backdropFilter: "blur(10px)",
@@ -200,10 +207,10 @@ export function VideoStage({ viral, theme = "dark", liveTrack, mirrorVideo = fal
       }}>
         <XIcon name="pause" size={18}/>
         <div style={{ flex: 1, height: 3, borderRadius: 2, background: "rgba(255,255,255,0.18)", position: "relative" }}>
-          <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: "62%", background: "var(--xs-warn)", borderRadius: 2 }}/>
-          <div style={{ position: "absolute", left: "62%", top: -3, width: 9, height: 9, borderRadius: "50%", background: "#f6f2ea" }}/>
+          <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: fillStr, background: "var(--xs-warn)", borderRadius: 2 }}/>
+          <div style={{ position: "absolute", left: fillStr, top: -3, width: 9, height: 9, borderRadius: "50%", background: "#f6f2ea" }}/>
         </div>
-        <span className="xs-tnum" style={{ fontSize: 11, opacity: 0.8 }}>01:24:38 · LIVE</span>
+        <span className="xs-tnum" style={{ fontSize: 11, opacity: 0.8 }}>{timerLabel} · LIVE</span>
         <XIcon name="more" size={16} style={{ opacity: 0.7 }}/>
       </div>
     </div>

@@ -3,6 +3,7 @@ import { Geist, Geist_Mono, Raleway } from "next/font/google"
 import "./globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
 import { cn } from "@/lib/utils";
+import "./xstream/xstream.css";
 
 const ralewayHeading = Raleway({subsets:['latin'],variable:'--font-heading'});
 

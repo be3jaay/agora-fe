@@ -10,7 +10,6 @@ import type {
   UID,
 } from "agora-rtc-sdk-ng";
 
-/* ── Types ──────────────────────────────────────────────────────── */
 export type LiveRole = "host" | "audience";
 
 export type ConnectionState =
@@ -29,15 +28,12 @@ export interface AgoraLiveState {
   isCamOff:      boolean;
   localVideo:    ICameraVideoTrack | null;
   remoteVideo:   IRemoteVideoTrack | null;
-  /** Join as host (broadcaster) or audience (viewer) */
   join:          (role: LiveRole) => Promise<void>;
-  /** Leave the channel and clean up */
   leave:         () => Promise<void>;
   toggleMic:     () => Promise<void>;
   toggleCamera:  () => Promise<void>;
 }
 
-/* ── Hook ───────────────────────────────────────────────────────── */
 export function useAgoraLive(): AgoraLiveState {
   const clientRef = useRef<IAgoraRTCClient | null>(null);
   const localVideoRef  = useRef<ICameraVideoTrack | null>(null);
@@ -52,7 +48,6 @@ export function useAgoraLive(): AgoraLiveState {
   const [localVideo,  setLocalVideo]  = useState<ICameraVideoTrack | null>(null);
   const [remoteVideo, setRemoteVideo] = useState<IRemoteVideoTrack | null>(null);
 
-  /* Cleanup on unmount */
   useEffect(() => {
     return () => {
       void cleanup();
@@ -84,7 +79,6 @@ export function useAgoraLive(): AgoraLiveState {
       setError(null);
       setRole(joinRole);
 
-      /* Fetch config from server-side route (env vars not exposed client-side) */
       const res = await fetch("/api/agora/config");
       if (!res.ok) throw new Error("Could not load Agora credentials.");
       const { appId, channel, token } = (await res.json()) as {
@@ -95,9 +89,8 @@ export function useAgoraLive(): AgoraLiveState {
 
       setState("connecting");
 
-      /* Dynamic import — keeps Agora out of the SSR bundle */
       const AgoraRTC = (await import("agora-rtc-sdk-ng")).default;
-      AgoraRTC.setLogLevel(2); // warn only
+      AgoraRTC.setLogLevel(2); 
 
       const client = AgoraRTC.createClient({
         mode: "live",
@@ -105,16 +98,13 @@ export function useAgoraLive(): AgoraLiveState {
       });
       clientRef.current = client;
 
-      /* Role */
       await client.setClientRole(joinRole === "host" ? "host" : "audience",
         joinRole === "audience" ? { level: 1 } : undefined
       );
 
-      /* Track remote users joining/leaving for viewer count */
       client.on("user-joined",    () => setViewerCount(n => n + 1));
       client.on("user-left",      () => setViewerCount(n => Math.max(0, n - 1)));
 
-      /* Subscribe to remote host video when audience */
       client.on("user-published", async (user: IAgoraRTCRemoteUser, mediaType: "audio" | "video") => {
         await client.subscribe(user, mediaType);
         if (mediaType === "video") {
@@ -128,11 +118,9 @@ export function useAgoraLive(): AgoraLiveState {
         if (mediaType === "video") setRemoteVideo(null);
       });
 
-      /* Join channel — uid 0 = server-assigned */
       const uid: UID = await client.join(appId, channel, token, 0);
       console.info(`[XStream] Joined channel as ${joinRole}, uid=${uid}`);
 
-      /* Publish if host */
       if (joinRole === "host") {
         const [micTrack, camTrack] = await AgoraRTC.createMicrophoneAndCameraTracks(
           { AEC: true, ANS: true },
@@ -145,7 +133,6 @@ export function useAgoraLive(): AgoraLiveState {
         setLocalVideo(camTrack);
       }
 
-      /* Seed viewer count from current users */
       setViewerCount(client.remoteUsers.length);
 
       setState("live");

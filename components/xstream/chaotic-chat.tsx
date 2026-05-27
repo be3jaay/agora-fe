@@ -38,7 +38,7 @@ export function ChaoticChat({ viral }: ChaoticChatProps) {
 
   return (
     <div style={{
-      flex: 1, minHeight: 0, display: "flex", flexDirection: "column",
+      flex: 1, height: "100%", minHeight: 0, display: "flex", flexDirection: "column",
       border: "1px solid var(--xs-border-s)", borderRadius: 14,
       background: "var(--xs-surf)", overflow: "hidden",
     }}>
